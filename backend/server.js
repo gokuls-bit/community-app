@@ -1,3 +1,4 @@
+// Required Modules
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -6,35 +7,36 @@ const helmet = require('helmet');
 const validator = require('validator');
 require('dotenv').config();
 
-// App Setup
+// Express App Initialization
 const app = express();
 
-// Security middleware
-app.use(helmet());
+// Middleware Setup
+app.use(helmet()); // Secure HTTP headers
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
+  credentials: true // Allow cookies and authentication headers
 }));
 
-// Rate limiting
+// General Rate Limiter
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 100,
   message: 'Too many requests from this IP, please try again later.'
 });
 app.use(limiter);
 
-// Specific rate limiting for registration
+// Specific Limiter for Registration Endpoint
 const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5, // limit each IP to 5 registration attempts per hour
+  max: 5,
   message: 'Too many registration attempts, please try again later.'
 });
 
+// Parsing Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// MongoDB Connection with better error handling
+// MongoDB Connection
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/nagarBrahminDB', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
@@ -48,7 +50,7 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/nagarBrahmi
   process.exit(1);
 });
 
-// Enhanced Mongoose Schema & Model
+// Mongoose Member Schema
 const memberSchema = new mongoose.Schema({
   name: { 
     type: String, 
@@ -70,9 +72,7 @@ const memberSchema = new mongoose.Schema({
     required: [true, 'Phone number is required'],
     trim: true,
     validate: {
-      validator: function(v) {
-        return /^[+]?[\d\s\-\(\)]{10,15}$/.test(v);
-      },
+      validator: v => /^[+]?[\d\s\-\(\)]{10,15}$/.test(v),
       message: 'Please provide a valid phone number'
     }
   },
@@ -94,22 +94,18 @@ const memberSchema = new mongoose.Schema({
   },
   dateOfBirth: Date,
   occupation: String,
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
 }, {
   timestamps: true
 });
 
-// Indexes for better performance
+// Indexes
 memberSchema.index({ email: 1 });
 memberSchema.index({ phone: 1 });
 memberSchema.index({ createdAt: -1 });
 
 const Member = mongoose.model('Member', memberSchema);
 
-// Enhanced API Routes
-
-// Health check endpoint
+// Health Check Route
 app.get('/api/health', (req, res) => {
   res.status(200).json({ 
     status: 'OK',
@@ -119,12 +115,11 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Register new member
+// Register Member Route
 app.post('/api/members/register', registerLimiter, async (req, res) => {
   try {
     const { name, email, phone, address, dateOfBirth, occupation, membershipType } = req.body;
 
-    // Enhanced validation
     if (!name || !email || !phone) {
       return res.status(400).json({ 
         error: 'Name, email, and phone are required fields.',
@@ -132,7 +127,6 @@ app.post('/api/members/register', registerLimiter, async (req, res) => {
       });
     }
 
-    // Check for existing member
     const existingMember = await Member.findOne({
       $or: [
         { email: email.toLowerCase() },
@@ -147,20 +141,16 @@ app.post('/api/members/register', registerLimiter, async (req, res) => {
       });
     }
 
-    // Create new member
-    const memberData = {
+    const newMember = new Member({
       name: name.trim(),
       email: email.toLowerCase().trim(),
       phone: phone.trim(),
-      membershipType: membershipType || 'regular'
-    };
+      membershipType: membershipType || 'regular',
+      address,
+      dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
+      occupation: occupation?.trim()
+    });
 
-    // Add optional fields if provided
-    if (address) memberData.address = address;
-    if (dateOfBirth) memberData.dateOfBirth = new Date(dateOfBirth);
-    if (occupation) memberData.occupation = occupation.trim();
-
-    const newMember = new Member(memberData);
     await newMember.save();
 
     res.status(201).json({ 
@@ -168,10 +158,9 @@ app.post('/api/members/register', registerLimiter, async (req, res) => {
       memberId: newMember._id,
       membershipType: newMember.membershipType
     });
-
   } catch (err) {
     console.error('Registration error:', err);
-    
+
     if (err.name === 'ValidationError') {
       const errors = Object.values(err.errors).map(e => e.message);
       return res.status(400).json({ 
@@ -188,19 +177,19 @@ app.post('/api/members/register', registerLimiter, async (req, res) => {
   }
 });
 
-// Get all members (with pagination and filtering)
+// Fetch All Members (with pagination and filters)
 app.get('/api/members', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-    
+
     const filter = {};
     if (req.query.status) filter.status = req.query.status;
     if (req.query.membershipType) filter.membershipType = req.query.membershipType;
 
     const members = await Member.find(filter)
-      .select('-__v') // Exclude version field
+      .select('-__v')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -219,197 +208,115 @@ app.get('/api/members', async (req, res) => {
     });
   } catch (err) {
     console.error('Get members error:', err);
-    res.status(500).json({ 
-      error: 'Failed to fetch members',
-      code: 'FETCH_ERROR'
-    });
+    res.status(500).json({ error: 'Failed to fetch members', code: 'FETCH_ERROR' });
   }
 });
 
-// Get member by ID
+// Get Member By ID
 app.get('/api/members/:id', async (req, res) => {
   try {
     const member = await Member.findById(req.params.id).select('-__v');
-    
+
     if (!member) {
-      return res.status(404).json({ 
-        error: 'Member not found',
-        code: 'MEMBER_NOT_FOUND'
-      });
+      return res.status(404).json({ error: 'Member not found', code: 'MEMBER_NOT_FOUND' });
     }
 
     res.json(member);
   } catch (err) {
-    console.error('Get member error:', err);
-    
     if (err.name === 'CastError') {
-      return res.status(400).json({ 
-        error: 'Invalid member ID format',
-        code: 'INVALID_ID'
-      });
+      return res.status(400).json({ error: 'Invalid member ID format', code: 'INVALID_ID' });
     }
-
-    res.status(500).json({ 
-      error: 'Failed to fetch member',
-      code: 'FETCH_ERROR'
-    });
+    res.status(500).json({ error: 'Failed to fetch member', code: 'FETCH_ERROR' });
   }
 });
 
-// Update member
+// Update Member By ID
 app.put('/api/members/:id', async (req, res) => {
   try {
-    const updates = { ...req.body };
-    delete updates._id; // Remove _id from updates
-    updates.updatedAt = new Date();
+    const updates = { ...req.body, updatedAt: new Date() };
+    delete updates._id;
 
-    const member = await Member.findByIdAndUpdate(
-      req.params.id, 
-      updates, 
-      { new: true, runValidators: true }
-    ).select('-__v');
+    const member = await Member.findByIdAndUpdate(req.params.id, updates, {
+      new: true,
+      runValidators: true
+    }).select('-__v');
 
     if (!member) {
-      return res.status(404).json({ 
-        error: 'Member not found',
-        code: 'MEMBER_NOT_FOUND'
-      });
+      return res.status(404).json({ error: 'Member not found', code: 'MEMBER_NOT_FOUND' });
     }
 
-    res.json({ 
-      message: 'Member updated successfully',
-      member 
-    });
+    res.json({ message: 'Member updated successfully', member });
   } catch (err) {
-    console.error('Update member error:', err);
-    
     if (err.name === 'ValidationError') {
       const errors = Object.values(err.errors).map(e => e.message);
-      return res.status(400).json({ 
-        error: 'Validation failed',
-        details: errors,
-        code: 'VALIDATION_ERROR'
-      });
+      return res.status(400).json({ error: 'Validation failed', details: errors, code: 'VALIDATION_ERROR' });
     }
-
     if (err.code === 11000) {
-      return res.status(409).json({ 
-        error: 'Email or phone already exists',
-        code: 'DUPLICATE_MEMBER'
-      });
+      return res.status(409).json({ error: 'Email or phone already exists', code: 'DUPLICATE_MEMBER' });
     }
-
-    res.status(500).json({ 
-      error: 'Failed to update member',
-      code: 'UPDATE_ERROR'
-    });
+    res.status(500).json({ error: 'Failed to update member', code: 'UPDATE_ERROR' });
   }
 });
 
-// Delete member
+// Delete Member By ID
 app.delete('/api/members/:id', async (req, res) => {
   try {
     const member = await Member.findByIdAndDelete(req.params.id);
-    
+
     if (!member) {
-      return res.status(404).json({ 
-        error: 'Member not found',
-        code: 'MEMBER_NOT_FOUND'
-      });
+      return res.status(404).json({ error: 'Member not found', code: 'MEMBER_NOT_FOUND' });
     }
 
-    res.json({ 
-      message: 'Member deleted successfully',
-      deletedMember: member
-    });
+    res.json({ message: 'Member deleted successfully', deletedMember: member });
   } catch (err) {
-    console.error('Delete member error:', err);
-    res.status(500).json({ 
-      error: 'Failed to delete member',
-      code: 'DELETE_ERROR'
-    });
+    res.status(500).json({ error: 'Failed to delete member', code: 'DELETE_ERROR' });
   }
 });
 
-// Get membership statistics
+// Membership Stats
 app.get('/api/stats', async (req, res) => {
   try {
-    const stats = await Member.aggregate([
-      {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          byStatus: {
-            $push: {
-              k: '$status',
-              v: 1
-            }
-          },
-          byMembershipType: {
-            $push: {
-              k: '$membershipType',
-              v: 1
-            }
-          }
-        }
-      }
-    ]);
+    const total = await Member.countDocuments();
 
-    const statusCount = await Member.aggregate([
+    const byStatus = await Member.aggregate([
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
-    const membershipTypeCount = await Member.aggregate([
+    const byMembershipType = await Member.aggregate([
       { $group: { _id: '$membershipType', count: { $sum: 1 } } }
     ]);
 
     res.json({
-      total: stats[0]?.total || 0,
-      byStatus: statusCount.reduce((acc, item) => {
-        acc[item._id] = item.count;
-        return acc;
-      }, {}),
-      byMembershipType: membershipTypeCount.reduce((acc, item) => {
-        acc[item._id] = item.count;
-        return acc;
-      }, {})
+      total,
+      byStatus: Object.fromEntries(byStatus.map(i => [i._id, i.count])),
+      byMembershipType: Object.fromEntries(byMembershipType.map(i => [i._id, i.count]))
     });
   } catch (err) {
-    console.error('Stats error:', err);
-    res.status(500).json({ 
-      error: 'Failed to fetch statistics',
-      code: 'STATS_ERROR'
-    });
+    res.status(500).json({ error: 'Failed to fetch statistics', code: 'STATS_ERROR' });
   }
 });
 
-// 404 handler
+// Fallback Route
 app.use('*', (req, res) => {
-  res.status(404).json({ 
-    error: 'Route not found',
-    code: 'NOT_FOUND'
-  });
+  res.status(404).json({ error: 'Route not found', code: 'NOT_FOUND' });
 });
 
-// Global error handler
+// Global Error Handler
 app.use((err, req, res, next) => {
   console.error('Global error:', err);
-  res.status(500).json({ 
-    error: 'Something went wrong!',
-    code: 'INTERNAL_ERROR'
-  });
+  res.status(500).json({ error: 'Something went wrong!', code: 'INTERNAL_ERROR' });
 });
 
-// Graceful shutdown
+// Graceful Shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully');
   await mongoose.connection.close();
   process.exit(0);
 });
 
-// Server Start
+// Server Listener
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📝 API Documentation available at http://localhost:${PORT}/api/health`);
+  console.log(`📝 Health check at http://localhost:${PORT}/api/health`);
 });
